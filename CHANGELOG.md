@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `bobgen-psql` now accepts `github.com/jackc/pgx/v5` (native pgx, used with `github.com/stephenafamo/bob/drivers/pgx`) as the `driver` option. Support is experimental: array columns work, but some other types such as `interval` and `tsvector` are not yet scannable by native pgx into the generated Go types.
+- `pgtypes.Array[T]` and `pgtypes.EnumArray[T]` now implement `pgtype.ArrayGetter` and `pgtype.ArraySetter`, so native pgx scans and encodes them directly. Their `Scan` method also decodes pgx's binary array format, so they work when wrapped in another `sql.Scanner` such as `null.Val`, `sql.Null` or `orm.NullTypeConverter`. With the native pgx driver, every array column is generated as `pgtypes.Array[T]`; the `lib/pq` and `pgx/v5/stdlib` drivers keep generating the same types as before. See [#90](https://github.com/stephenafamo/bob/issues/90) and [#739](https://github.com/stephenafamo/bob/issues/739).
+
+### Changed
+
+- `pgtypes.EnumArray[T]` is now an alias of `pgtypes.Array[T]`. `github.com/stephenafamo/bob/types/pgtypes` now imports `github.com/jackc/pgx/v5/pgtype`.
+
 ### Fixed
+
+- Fixed the generated `<Table>Slice.copyMatchingRows` (used by `UpdateAll`, `ReloadAll`, and the `UpdateMod`/`DeleteMod`/`MergeMod` loaders) dropping relationship and plugin caches when refreshing a slice in place. It used to swap each slice element for a freshly scanned model after copying over only `.R`, silently losing `.C` and any other non-column field. It now copies just the column fields onto the existing model instead, so the slice keeps its original pointers and all its cached fields. See [#759](https://github.com/stephenafamo/bob/pull/759) for the full rationale. Note: code relying on pointer identity changing across `UpdateAll`/`ReloadAll` will now observe the same pointer, and models returned by a caller-driven `.All()` call are no longer mutated with `.R`.
+
+- **BREAKING:** Fixed the generated single-model `(*Foo).Update` and `(*Foo).Reload` silently clearing relationship and plugin caches on every call. Both methods used to overwrite the receiver wholesale (`*o = *v`) with the freshly scanned row, which zeroed out every non-column field — the relationship cache `.R` (including `R.Loaded`), the counts plugin's `.C`, and anything a plugin adds via `model/fields/additional`. They now copy only the column fields instead, so those caches survive. See [#758](https://github.com/stephenafamo/bob/pull/758) for the full rationale.
+
+  **Breaking change:** code relying on `Update()`/`Reload()` clearing `.R` (e.g. a "reload if not loaded" pattern keyed off `R.Loaded.<Rel>`) will stop reloading, since `R.Loaded.<Rel>` now stays `true`. The same applies to `.C`.
 
 - **BREAKING:** The generated `Preload(name, retrieved)` method and the single-model `Load<Rel>` methods now **append** the current parent to a to-many back-reference instead of replacing it with a one-element slice holding only that parent. This is a regression fix, not a new choice of semantics: `orm.Preload` shares one related-struct instance across every parent row with the same join key ("dedup"), added opt-in as `orm.PreloadDedup` in commit `8d9485c` (2026-07-12) and made unconditional four days later by commit `76abd64` (2026-07-16), which dropped the opt-in gate so `buildPreloader` takes the dedup path whenever the join key is resolvable. Both commits shipped as [PR #736](https://github.com/stephenafamo/bob/pull/736) in **v0.50.0** — not v0.49.0, even though the closest CHANGELOG description of dedup ("`Preload` now shares a single related-struct instance...", still above) is filed under the already-released v0.49.0 section, a merge artifact from PR #736 landing after the v0.49.0 tag. That description also never mentions that dedup started as opt-in or that removing the gate changes what a to-many back-reference can hold — the gap this entry fills.
 
